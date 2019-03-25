@@ -1,9 +1,15 @@
 <?php
+ini_set('max_execution_time', 120);
 require 'vendor/autoload.php';
 use carbon\carbon;
 use Phpml\Classification\KNearestNeighbors;
+use Phpml\Classification\SVC;
+use Phpml\Classification\NaiveBayes;
+use Phpml\SupportVectorMachine\Kernel;
+use Phpml\Metric\Accuracy;
 
-$class = new KNearestNeighbors();
+$knn = new KNearestNeighbors();
+$nb = new NaiveBayes();
 
 function get($url){
     $ch = curl_init($url);
@@ -26,6 +32,10 @@ if (check()) {
     $currency_predict = $_GET['predict'];
     $days = $_GET['days'];
 
+    /*if ($base == $symbol) {
+        array_push($error, 'Base and symbol cant be the same');
+    }*/
+
     if (!is_numeric($currency_predict) || $currency_predict < 0 ) {
         array_push($error, 'Predict Rate should be greater than zero and should be numeric');
     }
@@ -38,30 +48,48 @@ if (check()) {
         array_push($error, 'Data days must be odd number');
     }
 
+     /*if ($days > 200) {
+        array_push($error, 'Data days must not be greater than 200');
+    }*/
+
     if(count($error) == 0){
-        $result = get('https://api.openrates.io/latest?base='.$base.'&symbols='.$symbol);
+        $api = file_get_contents("api.txt");
+        $domain = 'https://www.worldtradingdata.com/api/v1/forex_history';
+        $url = $domain.'?api_token='.$api.'&base='.$base.'&convert_to='.$symbol;
+        $result = get($url);
         $result = json_decode($result,true);
+        if (isset($result['Message'])) {
+            array_push($error, $result['Message']);
+        }
 
-        $from = Carbon::createFromFormat('Y-m-d',$result['date']);
-        $start = Carbon::createFromFormat('Y-m-d',$result['date'])->subDays($days);
-
+        if(count($error) == 0){
+        $history = $result['history'];
+        $from = Carbon::now()->startOfDay();
+        $start = Carbon::now()->startOfDay();
 
         $currency = [];
+        
+        for ($i=1; $i < $days ; $i++) {
+            $start->subDays(1);
+            if (!isset($history[$start->format('Y-m-d')])) {
+                $i--;
+                continue;
+            }
+            
+            array_push($currency, $history[$start->format('Y-m-d')]);
 
-        for($i=1;$i<=$days;$i++){
-            $start->addDays(1);
-            $response = json_decode(get('https://api.openrates.io/'.$start->format('Y-m-d').'?base='.$base.'&symbols='.$symbol),true);
-            array_push($currency, $response['rates'][$symbol]);
         }
 
         $bs=[];
         $currencys = [];
 
-        for($i=0;$i<=$days-2;$i++){
-            array_push($currencys, [$currency[$i],$currency[$i+1]]);
-            $decide = $currency[$i] < $currency[$i+1] ? 'Buy' : 'Sell';
+        for($i=$days-2;$i> 0;$i--){
+            array_push($currencys, [$currency[$i],$currency[$i-1]]);
+            $decide = $currency[$i] < $currency[$i-1] ? 'Buy' : 'Sell';
             array_push($bs, $decide);
         }
+    }
+        //exit();
     }
 }
 
@@ -75,24 +103,26 @@ if (check()) {
     <title>Forex Predict</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css">
     <style type="text/css" media="screen">
-    .response {
+        .response {
 
-        margin-top: 30px;
+            margin-top: 30px;
 
-        border-radius: 5px;
+            border-radius: 5px;
 
-        color: white;
+            color: white;
 
-        padding: 10px;
+            padding: 10px;
 
-        margin-bottom: 30px;
+            margin-bottom: 30px;
 
-    }
-</style>
+        }
+    </style>
 </head>
 <body>
     <div class="container mt-5 col-10 mx-auto">
         <h3>Forex Prediction</h3>
+        <p>Register @ <a href="https://www.worldtradingdata.com/register"> World Trading Data</a> to get your request api (Free acccount has 250 request per day limit)</p>
+        <p>Create a api.txt file exactly where forex_predict.php is and paste your api key on the first line.</p>
         <form action="" method="get" accept-charset="utf-8">
 
             <div>
@@ -102,7 +132,7 @@ if (check()) {
                         <option value=''>Choose</option>
                         <?php
                         foreach ($curr as $cur) {
-                            $check = $cur == "GBP" ? "selected" : "";
+                            $check = isset($base) && $base == $cur ? "selected" : $cur == "GBP" ? "selected" : "";
                             echo "<option ".$check." value=".$cur.">".$cur."</option>";
                         }
                         ?>
@@ -116,7 +146,7 @@ if (check()) {
                         <option value='' >Choose</option>
                         <?php
                         foreach ($curr as $cur) {
-                            $check = $cur == "USD" ? "selected" : "";
+                            $check = isset($symbol) && $symbol == $cur ? "selected" : $cur == "USD" ? "selected" : "";
                             echo "<option ".$check." value=".$cur.">".$cur."</option>";
                         }
                         ?>
@@ -149,13 +179,15 @@ if (check()) {
         }
 
         if (check() && count($error) == 0) {
-        echo '<div class="response bg-success">';
-            $class->train($currencys, $bs);
-            echo 'Forex data feched from https://api.openrates.io/ for <strong>'.$base.'/'.$symbol.'</strong> pair from '.$from->format('Y-m-d').' to '.$start->format('Y-m-d').' ('.$days.' Days) <br>';
+            echo '<div class="response bg-success">';
+            $knn->train($currencys, $bs);
+            $nb->train($currencys, $bs);
+            echo 'Forex data feched from '.$domain.' for <strong>'.$base.'/'.$symbol.'</strong> pair from '.$start->format('Y-m-d').' to '.$from->format('Y-m-d').' ('.$days.' Days) <br>';
             echo 'Last close rate is '.$currencys[count($currencys)-1][1].'<br>';
-            echo '<strong>'.$class->predict([$currencys[count($currencys)-1][1], $currency_predict]).' '.$base.'/'.$symbol.' @ '.$currency_predict.'</strong><br>';
-        //echo json_encode($bs,true).'<br>';
-        echo "</div>";
+            echo '<strong>'.$knn->predict([$currencys[count($currencys)-1][1], $currency_predict]).' '.$result['symbol'].' @ '.$currency_predict.' for KNearestNeighbors. </strong><br>';
+
+            echo '<strong>'.$nb->predict([$currencys[count($currencys)-1][1], $currency_predict]).' '.$result['symbol'].' @ '.$currency_predict.' for NaiveBayes. </strong><br>';
+            echo "</div>";
         }
         ?>
     </div>
