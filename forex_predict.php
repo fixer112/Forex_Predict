@@ -31,7 +31,7 @@ function fetch($file){
 }
 
 $error = [];
-$curr = ['USD','GBP','JPY','EUR', 'AUD', 'CAD'];
+$curr = ['USD','GBP','JPY','EUR', 'AUD', 'CAD', 'CHF'];
 
 function check(){
     return isset($_GET['base']) && isset($_GET['symbol']) && isset($_GET['predict']) && isset($_GET['days']);
